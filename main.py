@@ -134,7 +134,7 @@ async def detalle(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(respuesta)
 
 # 🚀 Ejecutar el bot
-if _name_ == "_main_":
+if __name__ == "__main__":
     TOKEN = os.getenv("BOT_TOKEN")  # <-- Render lo tomará desde la variable de entorno
     if not TOKEN:
         print("❌ Error: No se encontró la variable BOT_TOKEN.")
@@ -147,4 +147,5 @@ if _name_ == "_main_":
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, registrar))
 
     print("✅ Bot encendido y escuchando mensajes...")
+
     app.run_polling()
