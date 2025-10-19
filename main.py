@@ -3,6 +3,8 @@ import json
 from datetime import datetime
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
+from http.server import HTTPServer, BaseHTTPRequestHandler
+import threading
 
 # 🧩 Variables de entorno
 TOKEN = os.getenv("BOT_TOKEN")
@@ -124,7 +126,30 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         await update.message.reply_text("🚫 No tienes permiso para usar este bot.")
 
-# 🔧 Configuración
+# 🌐 Servidor HTTP dummy
+class DummyHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.send_header('Content-type', 'text/html')
+        self.end_headers()
+        self.wfile.write(b"Bot is running!")
+    
+    def log_message(self, format, *args):
+        pass
+
+def run_server():
+    port = int(os.getenv("PORT", 10000))
+    server = HTTPServer(("0.0.0.0", port), DummyHandler)
+    print(f"🌐 Servidor HTTP iniciado en puerto {port}")
+    server.serve_forever()
+
+# Inicia servidor HTTP en segundo plano
+print("🚀 Iniciando servidor HTTP...")
+server_thread = threading.Thread(target=run_server, daemon=True)
+server_thread.start()
+
+# Configurar bot
+print("🤖 Configurando bot de Telegram...")
 app = ApplicationBuilder().token(TOKEN).build()
 app.add_handler(CommandHandler("start", start))
 app.add_handler(CommandHandler("agregar", agregar))
