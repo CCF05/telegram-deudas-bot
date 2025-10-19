@@ -1,14 +1,9 @@
 services:
-  - type: web
-    name: magaly-bot
+  - type: worker
+    name: deudad-bot
     env: python
     plan: free
     region: oregon
-    buildCommand: |
-      python --version
-      pip install -r requirements.txt
+    buildCommand: pip install -r requirements.txt
     startCommand: python main.py
     autoDeploy: true
-    envVars:
-      - key: PYTHON_VERSION
-        value: "3.11"
