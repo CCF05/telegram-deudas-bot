@@ -1,9 +1,11 @@
 import os
 import json
+import asyncio
 from datetime import datetime
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
-from http.server import HTTPServer, BaseHTTPRequestHandler
+from fastapi import FastAPI
+import uvicorn
 import threading
 
 # 🧩 Variables de entorno
@@ -23,12 +25,13 @@ def guardar():
     with open(DATA_FILE, "w") as f:
         json.dump(registros, f, indent=4)
 
-# 🧮 Agregar deuda
+# -------------------- Comandos del Bot --------------------
+
 async def agregar(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id not in AUTHORIZED_IDS:
         return await update.message.reply_text("🚫 No tienes permiso para usar este bot.")
     if len(context.args) < 2:
-        return await update.message.reply_text("❗ Usa: /agregar <nombre> <cantidad> [descripción opcional]")
+        return await update.message.reply_text("❗ Usa: /agregar <nombre> <cantidad> [descripción opcional] [fecha opcional DD/MM/YYYY]")
 
     nombre = context.args[0].capitalize()
     try:
@@ -36,8 +39,18 @@ async def agregar(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except ValueError:
         return await update.message.reply_text("❗ La cantidad debe ser numérica.")
 
-    descripcion = " ".join(context.args[2:]) if len(context.args) > 2 else ""
-    fecha = datetime.now().strftime("%d/%m/%Y - %H:%M")
+    fecha_manual = None
+    if len(context.args) > 2:
+        posible_fecha = context.args[-1]
+        try:
+            fecha_manual = datetime.strptime(posible_fecha, "%d/%m/%Y").strftime("%d/%m/%Y")
+            descripcion = " ".join(context.args[2:-1])
+        except ValueError:
+            descripcion = " ".join(context.args[2:])
+    else:
+        descripcion = ""
+
+    fecha = fecha_manual if fecha_manual else datetime.now().strftime("%d/%m/%Y")
 
     if nombre not in registros:
         registros[nombre] = []
@@ -46,12 +59,11 @@ async def agregar(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await update.message.reply_text(f"✅ {nombre} te debe {cantidad} ({descripcion})\n📅 {fecha}")
 
-# 💵 Registrar pago
 async def pago(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id not in AUTHORIZED_IDS:
         return await update.message.reply_text("🚫 No tienes permiso para usar este bot.")
     if len(context.args) < 2:
-        return await update.message.reply_text("❗ Usa: /pago <nombre> <cantidad> [comentario opcional]")
+        return await update.message.reply_text("❗ Usa: /pago <nombre> <cantidad> [comentario opcional] [fecha opcional DD/MM/YYYY]")
 
     nombre = context.args[0].capitalize()
     try:
@@ -59,8 +71,18 @@ async def pago(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except ValueError:
         return await update.message.reply_text("❗ La cantidad debe ser numérica.")
 
-    descripcion = " ".join(context.args[2:]) if len(context.args) > 2 else ""
-    fecha = datetime.now().strftime("%d/%m/%Y - %H:%M")
+    fecha_manual = None
+    if len(context.args) > 2:
+        posible_fecha = context.args[-1]
+        try:
+            fecha_manual = datetime.strptime(posible_fecha, "%d/%m/%Y").strftime("%d/%m/%Y")
+            descripcion = " ".join(context.args[2:-1])
+        except ValueError:
+            descripcion = " ".join(context.args[2:])
+    else:
+        descripcion = ""
+
+    fecha = fecha_manual if fecha_manual else datetime.now().strftime("%d/%m/%Y")
 
     if nombre not in registros:
         registros[nombre] = []
@@ -69,7 +91,6 @@ async def pago(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await update.message.reply_text(f"💰 {nombre} pagó {cantidad} ({descripcion})\n📅 {fecha}")
 
-# 📋 Ver por persona
 async def ver(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id not in AUTHORIZED_IDS:
         return await update.message.reply_text("🚫 No tienes permiso.")
@@ -82,14 +103,13 @@ async def ver(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     total = 0
     detalle = ""
-    for mov in registros[nombre]:
+    for idx, mov in enumerate(registros[nombre], start=1):
         signo = "+" if mov["tipo"] == "debe" else "-"
         total += mov["cantidad"] if mov["tipo"] == "debe" else -mov["cantidad"]
-        detalle += f"{signo}{mov['cantidad']} | {mov['descripcion']} | {mov['fecha']}\n"
+        detalle += f"{idx}. {signo}{mov['cantidad']} | {mov['descripcion']} | {mov['fecha']}\n"
 
     await update.message.reply_text(f"📒 {nombre}:\n{detalle}\n💲 Total actual: {total}")
 
-# 📊 Total general
 async def total(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id not in AUTHORIZED_IDS:
         return await update.message.reply_text("🚫 No tienes permiso.")
@@ -97,14 +117,13 @@ async def total(update: Update, context: ContextTypes.DEFAULT_TYPE):
     resumen = ""
     total_general = 0
     for nombre, movs in registros.items():
-        total = sum(m["cantidad"] if m["tipo"] == "debe" else -m["cantidad"] for m in movs)
-        if total != 0:
-            resumen += f"{nombre}: {total}\n"
-            total_general += total
+        total_persona = sum(m["cantidad"] if m["tipo"] == "debe" else -m["cantidad"] for m in movs)
+        if total_persona != 0:
+            resumen += f"{nombre}: {total_persona}\n"
+            total_general += total_persona
 
     await update.message.reply_text(f"💼 Total por persona:\n{resumen}\n💰 Total general: {total_general}")
 
-# 🧾 Historial completo
 async def historial(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id not in AUTHORIZED_IDS:
         return await update.message.reply_text("🚫 No tienes permiso.")
@@ -113,50 +132,85 @@ async def historial(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     texto = "📜 Historial completo:\n\n"
     for nombre, movs in registros.items():
-        for m in movs:
+        for idx, m in enumerate(movs, start=1):
             signo = "+" if m["tipo"] == "debe" else "-"
-            texto += f"{nombre}: {signo}{m['cantidad']} | {m['descripcion']} | {m['fecha']}\n"
+            texto += f"{idx}. {nombre}: {signo}{m['cantidad']} | {m['descripcion']} | {m['fecha']}\n"
 
     await update.message.reply_text(texto)
 
-# 🚀 Inicio
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id in AUTHORIZED_IDS:
         await update.message.reply_text("🤖 Bot activo y listo para registrar deudas y pagos.")
     else:
         await update.message.reply_text("🚫 No tienes permiso para usar este bot.")
 
-# 🌐 Servidor HTTP dummy
-class DummyHandler(BaseHTTPRequestHandler):
-    def do_GET(self):
-        self.send_response(200)
-        self.send_header('Content-type', 'text/html')
-        self.end_headers()
-        self.wfile.write(b"Bot is running!")
-    
-    def log_message(self, format, *args):
-        pass
+# 🗑️ Eliminar persona o movimiento
+async def eliminar(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id not in AUTHORIZED_IDS:
+        return await update.message.reply_text("🚫 No tienes permiso para usar este bot.")
+    if len(context.args) < 1:
+        return await update.message.reply_text("❗ Usa: /eliminar <nombre> [índice]")
 
-def run_server():
+    nombre = context.args[0].capitalize()
+    if nombre not in registros:
+        return await update.message.reply_text(f"❌ No hay registros de {nombre}.")
+
+    # Solo nombre -> eliminar todo
+    if len(context.args) == 1:
+        del registros[nombre]
+        guardar()
+        return await update.message.reply_text(f"🗑️ Se eliminaron todos los registros de {nombre}.")
+
+    # Nombre + índice -> eliminar movimiento específico
+    try:
+        idx = int(context.args[1])
+    except ValueError:
+        return await update.message.reply_text("❗ El índice debe ser un número entero (ej: 1).")
+
+    movs = registros[nombre]
+    if idx < 1 or idx > len(movs):
+        return await update.message.reply_text(f"❗ Índice inválido. {nombre} tiene {len(movs)} movimientos.")
+
+    eliminado = movs.pop(idx - 1)
+    if not movs:
+        del registros[nombre]
+    guardar()
+
+    tipo = "debe" if eliminado["tipo"] == "debe" else "pagó"
+    return await update.message.reply_text(f"🗑️ Eliminado: {nombre} {tipo} {eliminado['cantidad']} | {eliminado['descripcion']} | {eliminado['fecha']}")
+
+# -------------------- FastAPI para Render --------------------
+app_api = FastAPI()
+
+@app_api.get("/")
+async def root():
+    return {"status": "Bot is running!"}
+
+# -------------------- Función para iniciar bot --------------------
+async def run_bot():
+    app = ApplicationBuilder().token(TOKEN).build()
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("agregar", agregar))
+    app.add_handler(CommandHandler("pago", pago))
+    app.add_handler(CommandHandler("ver", ver))
+    app.add_handler(CommandHandler("total", total))
+    app.add_handler(CommandHandler("historial", historial))
+    app.add_handler(CommandHandler("eliminar", eliminar))
+    await app.initialize()
+    await app.start()
+    print("🤖 Bot de Telegram corriendo...")
+    await app.updater.start_polling()
+    await asyncio.Event().wait()  # Mantener vivo
+
+# -------------------- Ejecutar FastAPI + Bot --------------------
+def main():
+    # Ejecutar bot en hilo separado
+    bot_thread = threading.Thread(target=lambda: asyncio.run(run_bot()))
+    bot_thread.start()
+
+    # Ejecutar servidor FastAPI en puerto de Render
     port = int(os.getenv("PORT", 10000))
-    server = HTTPServer(("0.0.0.0", port), DummyHandler)
-    print(f"🌐 Servidor HTTP iniciado en puerto {port}")
-    server.serve_forever()
+    uvicorn.run(app_api, host="0.0.0.0", port=port)
 
-# Inicia servidor HTTP en segundo plano
-print("🚀 Iniciando servidor HTTP...")
-server_thread = threading.Thread(target=run_server, daemon=True)
-server_thread.start()
-
-# Configurar bot
-print("🤖 Configurando bot de Telegram...")
-app = ApplicationBuilder().token(TOKEN).build()
-app.add_handler(CommandHandler("start", start))
-app.add_handler(CommandHandler("agregar", agregar))
-app.add_handler(CommandHandler("pago", pago))
-app.add_handler(CommandHandler("ver", ver))
-app.add_handler(CommandHandler("total", total))
-app.add_handler(CommandHandler("historial", historial))
-
-print("✅ Bot corriendo 24/7 en Render...")
-app.run_polling()
+if __name__ == "__main__":
+    main()
