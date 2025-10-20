@@ -10,7 +10,6 @@ import threading
 
 # 🧩 Variables de entorno
 TOKEN = os.getenv("BOT_TOKEN")
-AUTHORIZED_IDS = [int(i) for i in os.getenv("ADMIN_IDS", "7967718457").split(",")]
 
 DATA_FILE = "registros.json"
 
@@ -214,3 +213,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
