@@ -6,14 +6,13 @@ from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
 from fastapi import FastAPI
 import uvicorn
-import threading
 
-# 🧩 Variables de entorno
+# ---------------- Variables de entorno ----------------
 TOKEN = os.getenv("BOT_TOKEN")
-
+PORT = int(os.getenv("PORT", 10000))
 DATA_FILE = "registros.json"
 
-# 📁 Cargar registros guardados
+# ---------------- Cargar registros ----------------
 if os.path.exists(DATA_FILE):
     with open(DATA_FILE, "r") as f:
         registros = json.load(f)
@@ -24,11 +23,17 @@ def guardar():
     with open(DATA_FILE, "w") as f:
         json.dump(registros, f, indent=4)
 
-# -------------------- Comandos del Bot --------------------
+# ---------------- Comandos del Bot ----------------
+
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id in AUTHORIZED_IDS:
+        await update.message.reply_text("🤖 Bot activo y listo para registrar deudas y pagos.")
+    else:
+        await update.message.reply_text("🚫 No tienes permiso para usar este bot.")
 
 async def agregar(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id not in AUTHORIZED_IDS:
-        return await update.message.reply_text("🚫 No tienes permiso para usar este bot.")
+        return await update.message.reply_text("🚫 No tienes permiso.")
     if len(context.args) < 2:
         return await update.message.reply_text("❗ Usa: /agregar <nombre> <cantidad> [descripción opcional] [fecha opcional DD/MM/YYYY]")
 
@@ -60,7 +65,7 @@ async def agregar(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def pago(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id not in AUTHORIZED_IDS:
-        return await update.message.reply_text("🚫 No tienes permiso para usar este bot.")
+        return await update.message.reply_text("🚫 No tienes permiso.")
     if len(context.args) < 2:
         return await update.message.reply_text("❗ Usa: /pago <nombre> <cantidad> [comentario opcional] [fecha opcional DD/MM/YYYY]")
 
@@ -121,9 +126,6 @@ async def total(update: Update, context: ContextTypes.DEFAULT_TYPE):
             resumen += f"{nombre}: {total_persona}\n"
             total_general += total_persona
 
-    if not resumen:
-        return await update.message.reply_text("📭 No hay deudas pendientes.")
-
     await update.message.reply_text(f"💼 Total por persona:\n{resumen}\n💰 Total general: {total_general}")
 
 async def historial(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -140,15 +142,9 @@ async def historial(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await update.message.reply_text(texto)
 
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id in AUTHORIZED_IDS:
-        await update.message.reply_text("🤖 Bot activo y listo para registrar deudas y pagos.")
-    else:
-        await update.message.reply_text("🚫 No tienes permiso para usar este bot.")
-
 async def eliminar(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id not in AUTHORIZED_IDS:
-        return await update.message.reply_text("🚫 No tienes permiso para usar este bot.")
+        return await update.message.reply_text("🚫 No tienes permiso.")
     if len(context.args) < 1:
         return await update.message.reply_text("❗ Usa: /eliminar <nombre> [índice]")
 
@@ -156,13 +152,11 @@ async def eliminar(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if nombre not in registros:
         return await update.message.reply_text(f"❌ No hay registros de {nombre}.")
 
-    # Solo nombre -> eliminar todo
     if len(context.args) == 1:
         del registros[nombre]
         guardar()
         return await update.message.reply_text(f"🗑️ Se eliminaron todos los registros de {nombre}.")
 
-    # Nombre + índice -> eliminar movimiento específico
     try:
         idx = int(context.args[1])
     except ValueError:
@@ -178,21 +172,22 @@ async def eliminar(update: Update, context: ContextTypes.DEFAULT_TYPE):
     guardar()
 
     tipo = "debe" if eliminado["tipo"] == "debe" else "pagó"
-    return await update.message.reply_text(f"🗑️ Eliminado: {nombre} {tipo} {eliminado['cantidad']} | {eliminado['descripcion']} | {eliminado['fecha']}")
+    await update.message.reply_text(f"🗑️ Eliminado: {nombre} {tipo} {eliminado['cantidad']} | {eliminado['descripcion']} | {eliminado['fecha']}")
 
-# -------------------- FastAPI para mantener activo --------------------
+# ---------------- FastAPI para pings ----------------
 app_api = FastAPI()
 
 @app_api.get("/")
 async def root():
-    return {"status": "Bot is running!", "bot": "telegram-deudas-bot"}
+    return {"status": "Bot is running!", "registros": len(registros)}
 
 @app_api.get("/health")
 async def health():
     return {"status": "healthy", "registros": len(registros)}
 
-# -------------------- Función para iniciar bot --------------------
-async def run_bot():
+# ---------------- Función principal ----------------
+async def main():
+    # Configurar bot
     app = ApplicationBuilder().token(TOKEN).build()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("agregar", agregar))
@@ -201,31 +196,13 @@ async def run_bot():
     app.add_handler(CommandHandler("total", total))
     app.add_handler(CommandHandler("historial", historial))
     app.add_handler(CommandHandler("eliminar", eliminar))
-    
-    print("🚀 Iniciando bot de Telegram...")
-    await app.initialize()
-    await app.start()
-    print("✅ Bot de Telegram corriendo...")
-    await app.updater.start_polling()
-    
-    # Mantener el bot vivo
-    await asyncio.Event().wait()
 
-# -------------------- Ejecutar FastAPI + Bot --------------------
-def main():
-    print("🔧 Configurando servicios...")
-    
-    # Ejecutar bot en hilo separado con asyncio
-    def start_bot():
-        asyncio.run(run_bot())
-    
-    bot_thread = threading.Thread(target=start_bot, daemon=True)
-    bot_thread.start()
-    
-    print("🌐 Iniciando servidor web...")
-    # Ejecutar servidor FastAPI en puerto de Render
-    port = int(os.getenv("PORT", 10000))
-    uvicorn.run(app_api, host="0.0.0.0", port=port, log_level="info")
+    # Iniciar bot y FastAPI en paralelo
+    bot_task = asyncio.create_task(app.run_polling())
+    api_task = asyncio.create_task(uvicorn.run(app_api, host="0.0.0.0", port=PORT, log_level="info", loop="asyncio"))
 
+    await asyncio.gather(bot_task, api_task)
+
+# ---------------- Ejecutar ----------------
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())
