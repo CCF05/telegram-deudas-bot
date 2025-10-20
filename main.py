@@ -1,15 +1,16 @@
 import os
 import json
-import asyncio
 from datetime import datetime
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
 from fastapi import FastAPI
 import uvicorn
+import threading
 
-# ---------------- Variables de entorno ----------------
-TOKEN = os.getenv("BOT_TOKEN")
-PORT = int(os.getenv("PORT", 10000))
+# ---------------- Configuración ----------------
+TOKEN = os.getenv("BOT_TOKEN")  # Tu token del bot
+PORT = int(os.getenv("PORT", 10000))  # Puerto para FastAPI
+AUTHORIZED_IDS = [12345678]  # Reemplaza con los IDs que pueden usar el bot
 DATA_FILE = "registros.json"
 
 # ---------------- Cargar registros ----------------
@@ -24,185 +25,118 @@ def guardar():
         json.dump(registros, f, indent=4)
 
 # ---------------- Comandos del Bot ----------------
-
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id in AUTHORIZED_IDS:
-        await update.message.reply_text("🤖 Bot activo y listo para registrar deudas y pagos.")
+        await update.message.reply_text("🤖 Bot activo y listo.")
     else:
-        await update.message.reply_text("🚫 No tienes permiso para usar este bot.")
+        await update.message.reply_text("🚫 No tienes permiso.")
 
 async def agregar(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id not in AUTHORIZED_IDS:
-        return await update.message.reply_text("🚫 No tienes permiso.")
-    if len(context.args) < 2:
-        return await update.message.reply_text("❗ Usa: /agregar <nombre> <cantidad> [descripción opcional] [fecha opcional DD/MM/YYYY]")
-
-    nombre = context.args[0].capitalize()
+        return
     try:
+        nombre = context.args[0]
         cantidad = float(context.args[1])
-    except ValueError:
-        return await update.message.reply_text("❗ La cantidad debe ser numérica.")
-
-    fecha_manual = None
-    if len(context.args) > 2:
-        posible_fecha = context.args[-1]
-        try:
-            fecha_manual = datetime.strptime(posible_fecha, "%d/%m/%Y").strftime("%d/%m/%Y")
-            descripcion = " ".join(context.args[2:-1])
-        except ValueError:
-            descripcion = " ".join(context.args[2:])
-    else:
-        descripcion = ""
-
-    fecha = fecha_manual if fecha_manual else datetime.now().strftime("%d/%m/%Y - %H:%M")
-
-    if nombre not in registros:
-        registros[nombre] = []
-    registros[nombre].append({"tipo": "debe", "cantidad": cantidad, "descripcion": descripcion, "fecha": fecha})
-    guardar()
-
-    await update.message.reply_text(f"✅ {nombre} te debe {cantidad} ({descripcion})\n📅 {fecha}")
+        descripcion = " ".join(context.args[2:])
+        fecha = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        if nombre not in registros:
+            registros[nombre] = []
+        registros[nombre].append({"cantidad": cantidad, "descripcion": descripcion, "fecha": fecha})
+        guardar()
+        await update.message.reply_text(f"✅ Agregado a {nombre}: {cantidad} ({descripcion})")
+    except Exception as e:
+        await update.message.reply_text(f"⚠️ Error al agregar. Uso: /agregar Nombre Cantidad Descripción\n{e}")
 
 async def pago(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id not in AUTHORIZED_IDS:
-        return await update.message.reply_text("🚫 No tienes permiso.")
-    if len(context.args) < 2:
-        return await update.message.reply_text("❗ Usa: /pago <nombre> <cantidad> [comentario opcional] [fecha opcional DD/MM/YYYY]")
-
-    nombre = context.args[0].capitalize()
+        return
     try:
+        nombre = context.args[0]
         cantidad = float(context.args[1])
-    except ValueError:
-        return await update.message.reply_text("❗ La cantidad debe ser numérica.")
-
-    fecha_manual = None
-    if len(context.args) > 2:
-        posible_fecha = context.args[-1]
-        try:
-            fecha_manual = datetime.strptime(posible_fecha, "%d/%m/%Y").strftime("%d/%m/%Y")
-            descripcion = " ".join(context.args[2:-1])
-        except ValueError:
-            descripcion = " ".join(context.args[2:])
-    else:
-        descripcion = ""
-
-    fecha = fecha_manual if fecha_manual else datetime.now().strftime("%d/%m/%Y - %H:%M")
-
-    if nombre not in registros:
-        registros[nombre] = []
-    registros[nombre].append({"tipo": "pago", "cantidad": cantidad, "descripcion": descripcion, "fecha": fecha})
-    guardar()
-
-    await update.message.reply_text(f"💰 {nombre} pagó {cantidad} ({descripcion})\n📅 {fecha}")
+        descripcion = " ".join(context.args[2:])
+        fecha = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        if nombre not in registros:
+            registros[nombre] = []
+        registros[nombre].append({"cantidad": -cantidad, "descripcion": descripcion, "fecha": fecha})
+        guardar()
+        await update.message.reply_text(f"💰 Pago registrado a {nombre}: {cantidad} ({descripcion})")
+    except Exception as e:
+        await update.message.reply_text(f"⚠️ Error al registrar pago. Uso: /pago Nombre Cantidad Descripción\n{e}")
 
 async def ver(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id not in AUTHORIZED_IDS:
-        return await update.message.reply_text("🚫 No tienes permiso.")
-    if len(context.args) < 1:
-        return await update.message.reply_text("❗ Usa: /ver <nombre>")
-
-    nombre = context.args[0].capitalize()
-    if nombre not in registros:
-        return await update.message.reply_text(f"❌ No hay registros de {nombre}.")
-
-    total = 0
-    detalle = ""
-    for idx, mov in enumerate(registros[nombre], start=1):
-        signo = "+" if mov["tipo"] == "debe" else "-"
-        total += mov["cantidad"] if mov["tipo"] == "debe" else -mov["cantidad"]
-        detalle += f"{idx}. {signo}{mov['cantidad']} | {mov['descripcion']} | {mov['fecha']}\n"
-
-    await update.message.reply_text(f"📒 {nombre}:\n{detalle}\n💲 Total actual: {total}")
+        return
+    try:
+        nombre = context.args[0]
+        if nombre not in registros or not registros[nombre]:
+            await update.message.reply_text(f"📭 No hay registros para {nombre}")
+            return
+        msg = f"📄 Registro de {nombre}:\n"
+        for r in registros[nombre]:
+            msg += f"{r['fecha']}: {r['cantidad']} ({r['descripcion']})\n"
+        await update.message.reply_text(msg)
+    except Exception as e:
+        await update.message.reply_text(f"⚠️ Error. Uso: /ver Nombre\n{e}")
 
 async def total(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id not in AUTHORIZED_IDS:
-        return await update.message.reply_text("🚫 No tienes permiso.")
-
-    resumen = ""
-    total_general = 0
-    for nombre, movs in registros.items():
-        total_persona = sum(m["cantidad"] if m["tipo"] == "debe" else -m["cantidad"] for m in movs)
-        if total_persona != 0:
-            resumen += f"{nombre}: {total_persona}\n"
-            total_general += total_persona
-
-    await update.message.reply_text(f"💼 Total por persona:\n{resumen}\n💰 Total general: {total_general}")
-
-async def historial(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id not in AUTHORIZED_IDS:
-        return await update.message.reply_text("🚫 No tienes permiso.")
-    if not registros:
-        return await update.message.reply_text("🕳️ No hay movimientos aún.")
-
-    texto = "📜 Historial completo:\n\n"
-    for nombre, movs in registros.items():
-        for idx, m in enumerate(movs, start=1):
-            signo = "+" if m["tipo"] == "debe" else "-"
-            texto += f"{idx}. {nombre}: {signo}{m['cantidad']} | {m['descripcion']} | {m['fecha']}\n"
-
-    await update.message.reply_text(texto)
+        return
+    try:
+        nombre = context.args[0]
+        if nombre not in registros:
+            await update.message.reply_text(f"📭 No hay registros para {nombre}")
+            return
+        total_valor = sum([r["cantidad"] for r in registros[nombre]])
+        await update.message.reply_text(f"💲 Total de {nombre}: {total_valor}")
+    except Exception as e:
+        await update.message.reply_text(f"⚠️ Error. Uso: /total Nombre\n{e}")
 
 async def eliminar(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id not in AUTHORIZED_IDS:
-        return await update.message.reply_text("🚫 No tienes permiso.")
-    if len(context.args) < 1:
-        return await update.message.reply_text("❗ Usa: /eliminar <nombre> [índice]")
-
-    nombre = context.args[0].capitalize()
-    if nombre not in registros:
-        return await update.message.reply_text(f"❌ No hay registros de {nombre}.")
-
-    if len(context.args) == 1:
-        del registros[nombre]
-        guardar()
-        return await update.message.reply_text(f"🗑️ Se eliminaron todos los registros de {nombre}.")
-
+        return
     try:
-        idx = int(context.args[1])
-    except ValueError:
-        return await update.message.reply_text("❗ El índice debe ser un número entero (ej: 1).")
+        nombre = context.args[0]
+        if nombre in registros:
+            registros.pop(nombre)
+            guardar()
+            await update.message.reply_text(f"🗑️ Se eliminaron todos los registros de {nombre}")
+        else:
+            await update.message.reply_text(f"📭 No hay registros para {nombre}")
+    except Exception as e:
+        await update.message.reply_text(f"⚠️ Error. Uso: /eliminar Nombre\n{e}")
 
-    movs = registros[nombre]
-    if idx < 1 or idx > len(movs):
-        return await update.message.reply_text(f"❗ Índice inválido. {nombre} tiene {len(movs)} movimientos.")
-
-    eliminado = movs.pop(idx - 1)
-    if not movs:
-        del registros[nombre]
-    guardar()
-
-    tipo = "debe" if eliminado["tipo"] == "debe" else "pagó"
-    await update.message.reply_text(f"🗑️ Eliminado: {nombre} {tipo} {eliminado['cantidad']} | {eliminado['descripcion']} | {eliminado['fecha']}")
-
-# ---------------- FastAPI para pings ----------------
+# ---------------- FastAPI ----------------
 app_api = FastAPI()
 
 @app_api.get("/")
 async def root():
-    return {"status": "Bot is running!", "registros": len(registros)}
+    return {"status": "Bot is running!", "total_registros": len(registros)}
 
-@app_api.get("/health")
-async def health():
-    return {"status": "healthy", "registros": len(registros)}
-
-# ---------------- Función principal ----------------
-async def main():
-    # Configurar bot
+# ---------------- Ejecutar el Bot ----------------
+def run_bot():
     app = ApplicationBuilder().token(TOKEN).build()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("agregar", agregar))
     app.add_handler(CommandHandler("pago", pago))
     app.add_handler(CommandHandler("ver", ver))
     app.add_handler(CommandHandler("total", total))
-    app.add_handler(CommandHandler("historial", historial))
     app.add_handler(CommandHandler("eliminar", eliminar))
+    app.run_polling()
 
-    # Iniciar bot y FastAPI en paralelo
-    bot_task = asyncio.create_task(app.run_polling())
-    api_task = asyncio.create_task(uvicorn.run(app_api, host="0.0.0.0", port=PORT, log_level="info", loop="asyncio"))
+# ---------------- Ejecutar FastAPI ----------------
+def run_api():
+    uvicorn.run(app_api, host="0.0.0.0", port=PORT)
 
-    await asyncio.gather(bot_task, api_task)
-
-# ---------------- Ejecutar ----------------
+# ---------------- Main ----------------
 if __name__ == "__main__":
-    asyncio.run(main())
+    # FastAPI en el hilo principal
+    api_thread = threading.Thread(target=run_api)
+    api_thread.start()
+
+    # Bot en un hilo separado
+    bot_thread = threading.Thread(target=run_bot)
+    bot_thread.start()
+
+    # Mantener el main vivo
+    api_thread.join()
+    bot_thread.join()
